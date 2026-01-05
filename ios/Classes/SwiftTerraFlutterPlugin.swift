@@ -5,14 +5,45 @@ import Foundation
 import HealthKit
 
 public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
+  private static var eventSink: FlutterEventSink?
+  
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "terra_flutter_bridge", binaryMessenger: registrar.messenger())
     let instance = SwiftTerraFlutterPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
+    
+    // Register EventChannel for health updates
+    let eventChannel = FlutterEventChannel(name: "terra_flutter_bridge/health_updates", binaryMessenger: registrar.messenger())
+    eventChannel.setStreamHandler(instance)
+    
+    // Set up Terra updateHandler to forward health data to Flutter
+    Terra.updateHandler = { dataType, update in
+      Self.sendHealthUpdate(dataType: dataType, update: update)
+    }
   }
 
   // terra instance managed
   private var terra: TerraManager?
+  
+  // Send health update to Flutter via EventChannel
+  private static func sendHealthUpdate(dataType: DataTypes, update: Update) {
+    guard let sink = eventSink else { return }
+    
+    let samples = update.samples.map { sample in
+      [
+        "value": sample.value,
+        "timestamp": sample.timestamp.timeIntervalSince1970
+      ] as [String : Any]
+    }
+    
+    let updateData: [String: Any] = [
+      "dataType": dataType.rawValue,
+      "lastUpdated": update.lastUpdated?.timeIntervalSince1970 ?? 0,
+      "samples": samples
+    ]
+    
+    sink(updateData)
+  }
   
   // connection type translate
   private func connectionParse(connection: String) -> Connections? {
@@ -832,4 +863,17 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
 					result(FlutterMethodNotImplemented)
 		}
 	}
+}
+
+// MARK: - FlutterStreamHandler for health updates
+extension SwiftTerraFlutterPlugin: FlutterStreamHandler {
+  public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    SwiftTerraFlutterPlugin.eventSink = events
+    return nil
+  }
+  
+  public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    SwiftTerraFlutterPlugin.eventSink = nil
+    return nil
+  }
 }

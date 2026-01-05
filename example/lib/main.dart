@@ -1,9 +1,10 @@
-
 import 'package:logger/logger.dart';
 import 'package:terra_flutter_bridge/models/enums.dart';
 import 'package:terra_flutter_bridge/models/responses.dart';
+import 'package:terra_flutter_bridge/models/health_update.dart';
 import 'package:terra_flutter_bridge/terra_flutter_bridge.dart';
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:terra_flutter_example/generate.dart';
@@ -42,16 +43,50 @@ class AuthTokenResponse {
 }
 
 class _MyAppState extends State<MyApp> {
-
   String _testText = "Hello World";
   bool _initialised = false;
   bool _connected = false;
   DataMessage? daily;
+  StreamSubscription<TerraHealthUpdate>? _healthUpdateSubscription;
+  final List<String> _healthUpdateLogs = [];
 
   @override
   void initState() {
     super.initState();
     initTerraFunctionState();
+    _setupHealthUpdateListener();
+  }
+
+  @override
+  void dispose() {
+    _healthUpdateSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _setupHealthUpdateListener() {
+    _healthUpdateSubscription = TerraFlutter.healthUpdatesTyped.listen(
+      (update) {
+        logger.i('Terra Health Update: ${update.dataType}');
+        logger.i('  Last Updated: ${update.lastUpdated}');
+        logger.i('  Samples: ${update.samples.length}');
+
+        setState(() {
+          final log =
+              '${DateTime.now().toLocal()}: ${update.dataType} - ${update.samples.length} samples';
+          _healthUpdateLogs.insert(0, log);
+          if (_healthUpdateLogs.length > 10) {
+            _healthUpdateLogs.removeLast();
+          }
+        });
+
+        for (var sample in update.samples) {
+          logger.d('    Value: ${sample.value} at ${sample.timestamp}');
+        }
+      },
+      onError: (error) {
+        logger.e('Health update error: $error');
+      },
+    );
   }
 
   // Function messages are asynchronous, so we initialize in an async method.
@@ -66,12 +101,11 @@ class _MyAppState extends State<MyApp> {
     // USE YOUR OWN CATCH BLOCKS
     // HAVING ALL FUNCTIONS IN THE SAME CATCH IS NOT A GOOD IDEA
     try {
-      DateTime now = DateTime.now().toUtc();
-      DateTime lastMidnight = DateTime(now.year, now.month, now.day);
       initialised = await TerraFlutter.initTerra(constants.devId, "test_ref2");
       // await postPlannedWorkout_();
       logger.d(initialised?.success);
-      connected = await TerraFlutter.initConnection(c, (await generateToken()).token , true, []);
+      connected = await TerraFlutter.initConnection(
+          c, (await generateToken()).token, true, []);
 
       testText = await TerraFlutter.getUserId(c);
       logger.d(testText?.userId as String);
@@ -81,12 +115,13 @@ class _MyAppState extends State<MyApp> {
       // // daily = await TerraFlutter.getMenstruation(
       // //         c, DateTime(2023, 02, 01), DateTime(2023, 02, 10), toWebhook: false);
       daily = await TerraFlutter.getNutrition(
-              c, DateTime(2023, 02, 01), DateTime(2023, 02, 10));
+          c, DateTime(2023, 02, 01), DateTime(2023, 02, 10));
       daily = await TerraFlutter.getSleep(
-              c, DateTime(2023, 02, 01), DateTime(2023, 02, 10));
+          c, DateTime(2023, 02, 01), DateTime(2023, 02, 10));
       daily = await TerraFlutter.getActivity(
-              c, DateTime(2023, 02, 01), DateTime(2023, 02, 03), toWebhook: false);
-      logger.d("permissions:" );
+          c, DateTime(2023, 02, 01), DateTime(2023, 02, 03),
+          toWebhook: false);
+      logger.d("permissions:");
       logger.d(await TerraFlutter.getGivenPermissions());
     } on Exception catch (e) {
       logger.d('error caught: $e');
@@ -103,7 +138,6 @@ class _MyAppState extends State<MyApp> {
       _testText = testText?.userId ?? "";
     });
   }
-
 
   Future<AuthTokenResponse> generateToken() async {
     final response = await http.post(
@@ -126,16 +160,19 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
-  Future<void> postPlannedWorkout_() async{
-    final resp = await TerraFlutter.postPlannedWorkout(Connection.appleHealth, generateSamplePlannedWorkout());
+  Future<void> postPlannedWorkout_() async {
+    final resp = await TerraFlutter.postPlannedWorkout(
+        Connection.appleHealth, generateSamplePlannedWorkout());
     logger.d((resp?.success ?? false));
-    final postedPlannedWorkouts = await TerraFlutter.getPlannedWorkouts(Connection.appleHealth);
+    final postedPlannedWorkouts =
+        await TerraFlutter.getPlannedWorkouts(Connection.appleHealth);
     logger.d(postedPlannedWorkouts?.data.toString() ?? "No data");
     // final markComplete = await TerraFlutter.completePlannedWorkout(Connection.appleHealth, "ceef601a-23e4-4393-8483-a9f6d37b0407", DateTime.now());
     // logger.d((markComplete?.success ?? false));
-    final deleteWorkout = await TerraFlutter.deletePlannedWorkout(Connection.appleHealth, "ceef601a-23e4-4393-8483-a9f6d37b0407");
+    final deleteWorkout = await TerraFlutter.deletePlannedWorkout(
+        Connection.appleHealth, "ceef601a-23e4-4393-8483-a9f6d37b0407");
     logger.d((deleteWorkout?.success ?? false));
-  }  
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -162,6 +199,27 @@ class _MyAppState extends State<MyApp> {
               Text(
                 'Requested daily webhook for integration: $daily\n',
                 textAlign: TextAlign.center,
+              ),
+              const Divider(),
+              const Text(
+                'Health Update Log (Real-time):',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Expanded(
+                child: _healthUpdateLogs.isEmpty
+                    ? const Text('Waiting for health updates...')
+                    : ListView.builder(
+                        itemCount: _healthUpdateLogs.length,
+                        itemBuilder: (context, index) {
+                          return ListTile(
+                            dense: true,
+                            title: Text(
+                              _healthUpdateLogs[index],
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          );
+                        },
+                      ),
               ),
             ],
           ),
