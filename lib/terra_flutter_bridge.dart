@@ -58,6 +58,34 @@ class TerraFlutter {
     return healthUpdates.map((map) => TerraHealthUpdate.fromMap(map));
   }
 
+  /// Retrieve health events that were captured in background while app was closed.
+  ///
+  /// iOS stores health updates from HealthKit background delivery in UserDefaults
+  /// when the app is not running. This method retrieves and clears those stored events.
+  ///
+  /// Call this on app startup to sync background events.
+  ///
+  /// Returns a list of health updates captured while the app was backgrounded/terminated.
+  static Future<List<TerraHealthUpdate>> getBackgroundHealthEvents() async {
+    try {
+      final String? result =
+          await _channel.invokeMethod('getBackgroundHealthEvents');
+      if (result == null || result.isEmpty || result == '[]') {
+        return [];
+      }
+
+      final List<dynamic> eventsJson = jsonDecode(result);
+      return eventsJson
+          .map((json) => TerraHealthUpdate.fromMap(
+                Map<String, dynamic>.from(json as Map),
+              ))
+          .toList();
+    } catch (e) {
+      print('[Terra] Error retrieving background events: $e');
+      return [];
+    }
+  }
+
   static Future<String?> testFunction(String text) async {
     final String? version =
         await _channel.invokeMethod('testFunction', {"text": text});
