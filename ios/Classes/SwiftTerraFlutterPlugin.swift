@@ -26,6 +26,10 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
       Self.sendHealthUpdate(dataType: dataType, update: update)
     }
     print("[Terra] Terra.updateHandler configured")
+    
+    // FOR TESTING: Store a test event to verify the flow works
+    print("[Terra] Storing test event for debugging")
+    Self.storeTestEvent()
   }
 
   // terra instance managed
@@ -65,15 +69,45 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
     print("[Terra] Stored event in background. Total events: \(events.count)")
   }
   
+  // Store a test event for debugging purposes
+  private static func storeTestEvent() {
+    let eventData: [String: Any] = [
+      "dataType": "TEST_DATA",
+      "lastUpdated": Date().timeIntervalSince1970,
+      "samples": [
+        [
+          "value": 42.0,
+          "timestamp": Date().timeIntervalSince1970
+        ]
+      ],
+      "capturedAt": Date().timeIntervalSince1970
+    ]
+    
+    let defaults = UserDefaults.standard
+    var events = defaults.array(forKey: backgroundEventsKey) as? [[String: Any]] ?? []
+    events.append(eventData)
+    defaults.set(events, forKey: backgroundEventsKey)
+    defaults.synchronize()
+    
+    print("[Terra] Test event stored. Total events: \(events.count)")
+  }
+  
   // Retrieve and clear background stored events
   private static func getAndClearBackgroundEvents() -> [[String: Any]] {
+    print("[Terra] getAndClearBackgroundEvents() called")
     let defaults = UserDefaults.standard
+    print("[Terra] Checking UserDefaults for key: \(backgroundEventsKey)")
     let events = defaults.array(forKey: backgroundEventsKey) as? [[String: Any]] ?? []
     
+    print("[Terra] Found \(events.count) events in UserDefaults")
     if !events.isEmpty {
-      print("[Terra] Retrieving \(events.count) background events")
+      print("[Terra] Sample event: \(events.first!)")
+      print("[Terra] Clearing background events from UserDefaults")
       defaults.removeObject(forKey: backgroundEventsKey)
       defaults.synchronize()
+      print("[Terra] Background events cleared")
+    } else {
+      print("[Terra] No background events found in UserDefaults")
     }
     
     return events
@@ -153,10 +187,13 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
   
   // Get background stored health events
   private func getBackgroundHealthEvents(result: @escaping FlutterResult) {
+    print("[Terra] getBackgroundHealthEvents() called from Flutter")
     let events = SwiftTerraFlutterPlugin.getAndClearBackgroundEvents()
+    print("[Terra] Retrieved \(events.count) background events")
     do {
       let jsonData = try JSONSerialization.data(withJSONObject: events)
       let jsonString = String(data: jsonData, encoding: .utf8) ?? "[]"
+      print("[Terra] Returning JSON string: \(jsonString.prefix(200))...")
       result(jsonString)
     } catch {
       print("[Terra] Error serializing background events: \(error)")
