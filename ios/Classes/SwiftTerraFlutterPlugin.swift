@@ -6,6 +6,8 @@ import HealthKit
 
 public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
   private static var eventSink: FlutterEventSink?
+  private static let backgroundEventsKey = "terra_background_health_events"
+  private static let maxBackgroundEvents = 1000
   
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "terra_flutter_bridge", binaryMessenger: registrar.messenger())
@@ -15,19 +17,78 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
     // Register EventChannel for health updates
     let eventChannel = FlutterEventChannel(name: "terra_flutter_bridge/health_updates", binaryMessenger: registrar.messenger())
     eventChannel.setStreamHandler(instance)
+    print("[Terra] EventChannel registered for health updates")
     
     // Set up Terra updateHandler to forward health data to Flutter
     Terra.updateHandler = { dataType, update in
+      print("[Terra] Terra.updateHandler triggered - dataType: \(dataType.rawValue)")
+      Self.storeHealthUpdateInBackground(dataType: dataType, update: update)
       Self.sendHealthUpdate(dataType: dataType, update: update)
     }
+    print("[Terra] Terra.updateHandler configured")
   }
 
   // terra instance managed
   private var terra: TerraManager?
   
+  // Store health update in UserDefaults for background persistence
+  private static func storeHealthUpdateInBackground(dataType: DataTypes, update: Update) {
+    print("[Terra] Storing health update in background storage")
+    
+    let samples = update.samples.map { sample in
+      [
+        "value": sample.value,
+        "timestamp": sample.timestamp.timeIntervalSince1970
+      ] as [String : Any]
+    }
+    
+    let eventData: [String: Any] = [
+      "dataType": dataType.rawValue,
+      "lastUpdated": update.lastUpdated?.timeIntervalSince1970 ?? 0,
+      "samples": samples,
+      "capturedAt": Date().timeIntervalSince1970
+    ]
+    
+    let defaults = UserDefaults.standard
+    var events = defaults.array(forKey: backgroundEventsKey) as? [[String: Any]] ?? []
+    
+    events.append(eventData)
+    
+    // Keep only the most recent maxBackgroundEvents
+    if events.count > maxBackgroundEvents {
+      events = Array(events.suffix(maxBackgroundEvents))
+    }
+    
+    defaults.set(events, forKey: backgroundEventsKey)
+    defaults.synchronize()
+    
+    print("[Terra] Stored event in background. Total events: \(events.count)")
+  }
+  
+  // Retrieve and clear background stored events
+  private static func getAndClearBackgroundEvents() -> [[String: Any]] {
+    let defaults = UserDefaults.standard
+    let events = defaults.array(forKey: backgroundEventsKey) as? [[String: Any]] ?? []
+    
+    if !events.isEmpty {
+      print("[Terra] Retrieving \(events.count) background events")
+      defaults.removeObject(forKey: backgroundEventsKey)
+      defaults.synchronize()
+    }
+    
+    return events
+  }
+  
   // Send health update to Flutter via EventChannel
   private static func sendHealthUpdate(dataType: DataTypes, update: Update) {
-    guard let sink = eventSink else { return }
+    print("[Terra] sendHealthUpdate called - dataType: \(dataType.rawValue), samples: \(update.samples.count)")
+    
+    guard let sink = eventSink else {
+      print("[Terra] ERROR: eventSink is nil, cannot send health update (stored in background)")
+      return
+    }
+    
+    print("[Terra] eventSink is available, sending data to Flutter")
     
     let samples = update.samples.map { sample in
       [
@@ -42,7 +103,9 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
       "samples": samples
     ]
     
+    print("[Terra] Sending update data: \(updateData)")
     sink(updateData)
+    print("[Terra] Health update sent successfully")
   }
   
   // connection type translate
@@ -86,6 +149,19 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
   // test function
   private func testFunction(args: [String: Any], result: @escaping FlutterResult){
     result("Test function working in iOS, you passed text: " + (args["text"] as! String))
+  }
+  
+  // Get background stored health events
+  private func getBackgroundHealthEvents(result: @escaping FlutterResult) {
+    let events = SwiftTerraFlutterPlugin.getAndClearBackgroundEvents()
+    do {
+      let jsonData = try JSONSerialization.data(withJSONObject: events)
+      let jsonString = String(data: jsonData, encoding: .utf8) ?? "[]"
+      result(jsonString)
+    } catch {
+      print("[Terra] Error serializing background events: \(error)")
+      result("[]")
+    }
   }
 
 
@@ -760,6 +836,9 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
 				case "testFunction":
 					testFunction(args: args, result: result)
 					break;
+				case "getBackgroundHealthEvents":
+					getBackgroundHealthEvents(result: result)
+					break;
 				case "initTerra":
 					initTerra(
 						devID: args["devID"] as! String,
@@ -868,11 +947,13 @@ public class SwiftTerraFlutterPlugin: NSObject, FlutterPlugin {
 // MARK: - FlutterStreamHandler for health updates
 extension SwiftTerraFlutterPlugin: FlutterStreamHandler {
   public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    print("[Terra] FlutterStreamHandler.onListen called - EventSink registered")
     SwiftTerraFlutterPlugin.eventSink = events
     return nil
   }
   
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    print("[Terra] FlutterStreamHandler.onCancel called - EventSink removed")
     SwiftTerraFlutterPlugin.eventSink = nil
     return nil
   }
